@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/google/go-github/v53/github"
@@ -17,16 +17,18 @@ import (
 // Codecov API base URL
 const codecovAPIBase = "https://codecov.io/api/v2/github"
 
-// Repository structure for parsing API response
-type Repo struct {
-	Name string `json:"name"`
-}
-
 // Commit structure to fetch latest test coverage
 type Commit struct {
 	Totals struct {
 		Coverage float64 `json:"coverage"`
 	} `json:"totals"`
+}
+
+// RepoCoverage stores repo name and its coverage percentage
+type RepoCoverage struct {
+	Name      string
+	Coverage  float64
+	Configured bool
 }
 
 // Fetch all repositories using pagination
@@ -59,20 +61,13 @@ func getAllRepos(org, githubToken string) ([]string, error) {
 		opts.Page = resp.NextPage
 	}
 
-	// Print all repos retrieved
-	fmt.Println("\n[DEBUG] Retrieved repositories from GitHub (Total:", len(allRepos), ")")
-	for _, repo := range allRepos {
-		fmt.Println("- ", repo)
-	}
-
 	return allRepos, nil
 }
 
 // Fetch latest commit test coverage for a repository
-func getRepoCoverage(org, repo, token string) (float64, error) {
+func getRepoCoverage(org, repo, token string) (float64, bool) {
 	// Construct the Codecov API URL
 	url := fmt.Sprintf("%s/%s/repos/%s/commits", codecovAPIBase, org, repo)
-	fmt.Println("\n[DEBUG] Codecov API URL:", url) // Print constructed API URL
 
 	// Make HTTP request to Codecov API
 	req, _ := http.NewRequest("GET", url, nil)
@@ -81,33 +76,26 @@ func getRepoCoverage(org, repo, token string) (float64, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("failed to call Codecov API: %v", err)
+		return 0, false
 	}
 	defer resp.Body.Close()
 
-	// Debugging: Print HTTP response status
-	fmt.Printf("[DEBUG] Codecov API Response Status: %d\n", resp.StatusCode)
-
-	// Read full response body for debugging
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("[DEBUG] Codecov API Response Body:", string(body)) // Print API response body
-
 	if resp.StatusCode != 200 {
-		return 0, fmt.Errorf("Codecov API returned non-200 status: %d", resp.StatusCode)
+		return 0, false
 	}
 
 	var data struct {
 		Results []Commit `json:"results"`
 	}
-	if err := json.Unmarshal(body, &data); err != nil {
-		return 0, fmt.Errorf("error decoding coverage data: %v", err)
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return 0, false
 	}
 
 	if len(data.Results) == 0 || data.Results[0].Totals.Coverage == 0 {
-		return 0, fmt.Errorf("no coverage data found for repo %s", repo)
+		return 0, false
 	}
 
-	return data.Results[0].Totals.Coverage, nil
+	return data.Results[0].Totals.Coverage, true
 }
 
 func main() {
@@ -130,16 +118,32 @@ func main() {
 		log.Fatalf("❌ Error getting repos: %v", err)
 	}
 
+	// Store coverage details
+	var coveredRepos []RepoCoverage
+	var notConfiguredRepos []RepoCoverage
+
 	// Fetch coverage for each repository
-	fmt.Println("\n[INFO] Fetching test coverage for repositories...")
 	for _, repo := range repos {
-		fmt.Printf("\n🔹 Checking coverage for repo: %s\n", repo)
-		coverage, err := getRepoCoverage(org, repo, codecovToken)
-		if err == nil { // Only print repos with valid coverage
-			fmt.Printf("✅ Repo: %s, Test Coverage: %.2f%%\n", repo, coverage)
+		coverage, configured := getRepoCoverage(org, repo, codecovToken)
+		if configured {
+			coveredRepos = append(coveredRepos, RepoCoverage{Name: repo, Coverage: coverage, Configured: true})
+		} else {
+			notConfiguredRepos = append(notConfiguredRepos, RepoCoverage{Name: repo, Coverage: 0, Configured: false})
 		}
 	}
 
-	// Debug: Total repositories found
-	fmt.Printf("\n✅ Total repositories processed: %d\n", len(repos))
+	// Sort repositories with coverage in descending order
+	sort.Slice(coveredRepos, func(i, j int) bool {
+		return coveredRepos[i].Coverage > coveredRepos[j].Coverage
+	})
+
+	// Print repositories with coverage first
+	for _, repo := range coveredRepos {
+		fmt.Printf("%s: %.2f%%\n", repo.Name, repo.Coverage)
+	}
+
+	// Print repositories without coverage
+	for _, repo := range notConfiguredRepos {
+		fmt.Printf("%s: Not Configured\n", repo.Name)
+	}
 }
