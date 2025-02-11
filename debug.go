@@ -29,47 +29,39 @@ type Commit struct {
 	} `json:"totals"`
 }
 
-// Fetch list of repositories from Codecov
-func getAllRepos(org, token string) ([]string, error) {
-	url := fmt.Sprintf("%s/%s/repos", codecovAPIBase, org)
+// Fetch list of repositories from GitHub
+func getAllRepos(org, githubToken string) ([]string, error) {
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: githubToken})
+	tc := oauth2.NewClient(ctx, ts)
+	ghClient := github.NewClient(tc)
 
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	// Fetch repositories
+	repos, _, err := ghClient.Repositories.ListByOrg(ctx, org, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call Codecov API: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Codecov API returned non-200 status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("error fetching repositories from GitHub: %v", err)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
-	var data struct {
-		Results []Repo `json:"results"`
+	var repoNames []string
+	fmt.Println("\n[DEBUG] Retrieved repositories from GitHub:")
+	for _, repo := range repos {
+		repoName := repo.GetName()
+		repoNames = append(repoNames, repoName)
+		fmt.Println("- ", repoName) // Print each repo name
 	}
 
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, fmt.Errorf("error decoding repo list: %v", err)
-	}
-
-	var repos []string
-	for _, repo := range data.Results {
-		repos = append(repos, repo.Name)
-	}
-
-	return repos, nil
+	return repoNames, nil
 }
 
 // Fetch latest commit test coverage for a repository
 func getRepoCoverage(org, repo, token string) (float64, error) {
+	// Construct the Codecov API URL
 	url := fmt.Sprintf("%s/%s/repos/%s/commits", codecovAPIBase, org, repo)
+	fmt.Println("\n[DEBUG] Codecov API URL:", url) // Print constructed API URL
 
+	// Make HTTP request to Codecov API
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+token) // Use Bearer Token authentication
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -78,15 +70,20 @@ func getRepoCoverage(org, repo, token string) (float64, error) {
 	}
 	defer resp.Body.Close()
 
+	// Debugging: Print HTTP response status
+	fmt.Printf("[DEBUG] Codecov API Response Status: %d\n", resp.StatusCode)
+
+	// Read full response body for debugging
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Println("[DEBUG] Codecov API Response Body:", string(body)) // Print API response body
+
 	if resp.StatusCode != 200 {
 		return 0, fmt.Errorf("Codecov API returned non-200 status: %d", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
 	var data struct {
 		Results []Commit `json:"results"`
 	}
-
 	if err := json.Unmarshal(body, &data); err != nil {
 		return 0, fmt.Errorf("error decoding coverage data: %v", err)
 	}
@@ -101,23 +98,30 @@ func getRepoCoverage(org, repo, token string) (float64, error) {
 func main() {
 	org := "openshift" // Organization name
 
-	// Get Codecov token from environment variable
-	codecovToken := os.Getenv("CODECOV_TOKEN")
-	if codecovToken == "" {
-		log.Fatal("Please set the CODECOV_TOKEN environment variable")
+	// Get API tokens from environment variables
+	githubToken := os.Getenv("GITHUB_TOKEN")
+	if githubToken == "" {
+		log.Fatal("❌ Please set the GITHUB_TOKEN environment variable")
 	}
 
-	// Fetch repositories from Codecov
-	repos, err := getAllRepos(org, codecovToken)
+	codecovToken := os.Getenv("CODECOV_TOKEN")
+	if codecovToken == "" {
+		log.Fatal("❌ Please set the CODECOV_TOKEN environment variable")
+	}
+
+	// Fetch repositories from GitHub
+	repos, err := getAllRepos(org, githubToken)
 	if err != nil {
-		log.Fatalf("Error getting repos: %v", err)
+		log.Fatalf("❌ Error getting repos: %v", err)
 	}
 
 	// Fetch coverage for each repository
+	fmt.Println("\n[INFO] Fetching test coverage for repositories...")
 	for _, repo := range repos {
+		fmt.Printf("\n🔹 Checking coverage for repo: %s\n", repo)
 		coverage, err := getRepoCoverage(org, repo, codecovToken)
-		if err == nil { // Only print repos with coverage
-			fmt.Printf("Repo: %s, Test Coverage: %.2f%%\n", repo, coverage)
+		if err == nil { // Only print repos with valid coverage
+			fmt.Printf("✅ Repo: %s, Test Coverage: %.2f%%\n", repo, coverage)
 		}
 	}
 }
