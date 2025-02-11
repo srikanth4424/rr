@@ -25,10 +25,10 @@ type CodecovResponse struct {
 }
 
 // getCoverage calls the Codecov API for the given organization/repository and returns the coverage percentage.
-func getCoverage(org, repo string) (float64, error) {
-	// Construct the Codecov API URL; adjust the branch if needed.
-	url := fmt.Sprintf("https://codecov.io/api/gh/%s/%s?branch=main", org, repo)
-	
+func getCoverage(org, repo, token string) (float64, error) {
+	// Construct the Codecov API URL with authentication token
+	url := fmt.Sprintf("https://codecov.io/api/gh/%s/%s?branch=main&token=%s", org, repo, token)
+
 	// Create an HTTP client with a timeout.
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -63,17 +63,23 @@ func getCoverage(org, repo string) (float64, error) {
 }
 
 func main() {
-	org := "your-org-name" // replace with your GitHub organization name
+	org := "your-org-name" // Replace with your GitHub organization name
 
 	// Get GitHub token from environment variable.
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
+	githubToken := os.Getenv("GITHUB_TOKEN")
+	if githubToken == "" {
 		log.Fatal("Please set the GITHUB_TOKEN environment variable")
+	}
+
+	// Get Codecov token from environment variable.
+	codecovToken := os.Getenv("CODECOV_TOKEN")
+	if codecovToken == "" {
+		log.Fatal("Please set the CODECOV_TOKEN environment variable")
 	}
 
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: token},
+		&oauth2.Token{AccessToken: githubToken},
 	)
 	tc := oauth2.NewClient(ctx, ts)
 	ghClient := github.NewClient(tc)
@@ -88,7 +94,7 @@ func main() {
 	for _, repo := range repos {
 		repoName := repo.GetName()
 		fmt.Printf("Processing repository: %s\n", repoName)
-		coverage, err := getCoverage(org, repoName)
+		coverage, err := getCoverage(org, repoName, codecovToken)
 		if err != nil {
 			fmt.Printf("Repo: %s, error getting coverage: %v\n", repoName, err)
 		} else {
