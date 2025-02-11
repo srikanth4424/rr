@@ -32,7 +32,6 @@ type Commit struct {
 // Fetch list of repositories from Codecov
 func getAllRepos(org, token string) ([]string, error) {
 	url := fmt.Sprintf("%s/%s/repos", codecovAPIBase, org)
-	fmt.Println("[DEBUG] Fetching Repos:", url)
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -68,7 +67,6 @@ func getAllRepos(org, token string) ([]string, error) {
 // Fetch latest commit test coverage for a repository
 func getRepoCoverage(org, repo, token string) (float64, error) {
 	url := fmt.Sprintf("%s/%s/repos/%s/commits", codecovAPIBase, org, repo)
-	fmt.Println("[DEBUG] Fetching Coverage:", url)
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -93,7 +91,7 @@ func getRepoCoverage(org, repo, token string) (float64, error) {
 		return 0, fmt.Errorf("error decoding coverage data: %v", err)
 	}
 
-	if len(data.Results) == 0 {
+	if len(data.Results) == 0 || data.Results[0].Totals.Coverage == 0 {
 		return 0, fmt.Errorf("no coverage data found for repo %s", repo)
 	}
 
@@ -118,10 +116,8 @@ func main() {
 	// Fetch coverage for each repository
 	for _, repo := range repos {
 		coverage, err := getRepoCoverage(org, repo, codecovToken)
-		if err != nil {
-			fmt.Printf("[ERROR] Repo: %s, error getting coverage: %v\n", repo, err)
-		} else {
-			fmt.Printf("[SUCCESS] Repo: %s, Test Coverage: %.2f%%\n", repo, coverage)
+		if err == nil { // Only print repos with coverage
+			fmt.Printf("Repo: %s, Test Coverage: %.2f%%\n", repo, coverage)
 		}
 	}
 }
