@@ -29,28 +29,43 @@ type Commit struct {
 	} `json:"totals"`
 }
 
-// Fetch list of repositories from GitHub
+// Fetch all repositories using pagination
 func getAllRepos(org, githubToken string) ([]string, error) {
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: githubToken})
 	tc := oauth2.NewClient(ctx, ts)
 	ghClient := github.NewClient(tc)
 
-	// Fetch repositories
-	repos, _, err := ghClient.Repositories.ListByOrg(ctx, org, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching repositories from GitHub: %v", err)
+	var allRepos []string
+	opts := &github.RepositoryListByOrgOptions{ListOptions: github.ListOptions{PerPage: 100}} // Fetch 100 repos per request
+
+	for {
+		repos, resp, err := ghClient.Repositories.ListByOrg(ctx, org, opts)
+		if err != nil {
+			return nil, fmt.Errorf("error fetching repositories from GitHub: %v", err)
+		}
+
+		// Append repo names
+		for _, repo := range repos {
+			allRepos = append(allRepos, repo.GetName())
+		}
+
+		// Break loop if there are no more pages
+		if resp.NextPage == 0 {
+			break
+		}
+
+		// Move to next page
+		opts.Page = resp.NextPage
 	}
 
-	var repoNames []string
-	fmt.Println("\n[DEBUG] Retrieved repositories from GitHub:")
-	for _, repo := range repos {
-		repoName := repo.GetName()
-		repoNames = append(repoNames, repoName)
-		fmt.Println("- ", repoName) // Print each repo name
+	// Print all repos retrieved
+	fmt.Println("\n[DEBUG] Retrieved repositories from GitHub (Total:", len(allRepos), ")")
+	for _, repo := range allRepos {
+		fmt.Println("- ", repo)
 	}
 
-	return repoNames, nil
+	return allRepos, nil
 }
 
 // Fetch latest commit test coverage for a repository
@@ -124,4 +139,7 @@ func main() {
 			fmt.Printf("✅ Repo: %s, Test Coverage: %.2f%%\n", repo, coverage)
 		}
 	}
+
+	// Debug: Total repositories found
+	fmt.Printf("\n✅ Total repositories processed: %d\n", len(repos))
 }
