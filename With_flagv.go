@@ -202,15 +202,15 @@ func main() {
 		}
 	}
 
-	// Sort repositories by coverage percentage (descending order)
+	// Sort repositories by coverage percentage (ascending order)
 	sort.Slice(coveredRepos, func(i, j int) bool {
-		return coveredRepos[i].Coverage > coveredRepos[j].Coverage
+		return coveredRepos[i].Coverage < coveredRepos[j].Coverage
 	})
 
 	// Print CSV headers
 	fmt.Println("Repository, Coverage Percentage")
 
-	// Print repositories with coverage first
+	// Print repositories with coverage first (sorted in ascending order)
 	for _, repo := range coveredRepos {
 		fmt.Printf("%s, %.2f%%\n", repo.Name, repo.Coverage)
 
