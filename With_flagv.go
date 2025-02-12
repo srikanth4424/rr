@@ -39,8 +39,8 @@ type CodecovReport struct {
 
 // RepoCoverage stores repo name and its coverage percentage
 type RepoCoverage struct {
-	Name      string
-	Coverage  float64
+	Name       string
+	Coverage   float64
 	Configured bool
 }
 
@@ -133,6 +133,7 @@ func generateCSVReport(repo string, report *CodecovReport) error {
 	filename := fmt.Sprintf("detailed_%s_coverage_report.csv", repo)
 	file, err := os.Create(filename)
 	if err != nil {
+		fmt.Printf("❌ Error writing report for %s: %v\n", repo, err)
 		return err
 	}
 	defer file.Close()
@@ -143,7 +144,7 @@ func generateCSVReport(repo string, report *CodecovReport) error {
 	// Write CSV headers
 	writer.Write([]string{"File", "Total Lines", "Covered Lines", "Missed Lines", "Coverage %"})
 
-	// Sort files by lowest coverage
+	// Sort files by lowest coverage (ascending order)
 	sort.Slice(report.Files, func(i, j int) bool {
 		return report.Files[i].Totals.Coverage < report.Files[j].Totals.Coverage
 	})
@@ -159,6 +160,7 @@ func generateCSVReport(repo string, report *CodecovReport) error {
 		})
 	}
 
+	fmt.Printf("✅ Detailed coverage report generated for %s: %s\n", repo, filename)
 	return nil
 }
 
