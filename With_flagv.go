@@ -37,7 +37,14 @@ type CodecovReport struct {
 	Files []FileCoverage `json:"files"`
 }
 
-// Fetch all repositories from GitHub
+// RepoCoverage stores repo name and its coverage percentage
+type RepoCoverage struct {
+	Name      string
+	Coverage  float64
+	Configured bool
+}
+
+// Fetch all repositories using pagination
 func getAllRepos(org, githubToken string) ([]string, error) {
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: githubToken})
@@ -133,7 +140,7 @@ func generateCSVReport(repo string, report *CodecovReport) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write header
+	// Write CSV headers
 	writer.Write([]string{"File", "Total Lines", "Covered Lines", "Missed Lines", "Coverage %"})
 
 	// Sort files by lowest coverage
@@ -179,24 +186,43 @@ func main() {
 		log.Fatalf("❌ Error getting repositories: %v", err)
 	}
 
-	// Print CSV format header
-	fmt.Println("Repository, Coverage Percentage")
+	// Store coverage details
+	var coveredRepos []RepoCoverage
+	var notConfiguredRepos []RepoCoverage
 
 	// Fetch coverage for each repository
 	for _, repo := range repos {
 		coverage, configured := getRepoCoverage(org, repo, codecovToken)
 		if configured {
-			fmt.Printf("%s, %.2f%%\n", repo, coverage)
-
-			// Generate detailed CSV report if verbose mode is enabled
-			if *verbose {
-				report, err := getDetailedCoverageReport(org, repo, codecovToken)
-				if err == nil {
-					_ = generateCSVReport(repo, report)
-				}
-			}
+			coveredRepos = append(coveredRepos, RepoCoverage{Name: repo, Coverage: coverage, Configured: true})
 		} else {
-			fmt.Printf("%s, Not Configured\n", repo)
+			notConfiguredRepos = append(notConfiguredRepos, RepoCoverage{Name: repo, Coverage: 0, Configured: false})
 		}
+	}
+
+	// Sort repositories by coverage percentage (descending order)
+	sort.Slice(coveredRepos, func(i, j int) bool {
+		return coveredRepos[i].Coverage > coveredRepos[j].Coverage
+	})
+
+	// Print CSV headers
+	fmt.Println("Repository, Coverage Percentage")
+
+	// Print repositories with coverage first
+	for _, repo := range coveredRepos {
+		fmt.Printf("%s, %.2f%%\n", repo.Name, repo.Coverage)
+
+		// Generate detailed CSV report if verbose mode is enabled
+		if *verbose {
+			report, err := getDetailedCoverageReport(org, repo.Name, codecovToken)
+			if err == nil {
+				_ = generateCSVReport(repo.Name, report)
+			}
+		}
+	}
+
+	// Print repositories without coverage
+	for _, repo := range notConfiguredRepos {
+		fmt.Printf("%s, Not Configured\n", repo.Name)
 	}
 }
