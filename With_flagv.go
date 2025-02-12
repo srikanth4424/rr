@@ -37,53 +37,6 @@ type CodecovReport struct {
 	Files []FileCoverage `json:"files"`
 }
 
-// Commit structure to fetch latest test coverage
-type Commit struct {
-	Totals struct {
-		Coverage float64 `json:"coverage"`
-	} `json:"totals"`
-}
-
-// RepoCoverage stores repo name and its coverage percentage
-type RepoCoverage struct {
-	Name       string
-	Coverage   float64
-	Configured bool
-}
-
-// Fetch all repositories using pagination
-func getAllRepos(org, githubToken string) ([]string, error) {
-	ctx := context.Background()
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: githubToken})
-	tc := oauth2.NewClient(ctx, ts)
-	ghClient := github.NewClient(tc)
-
-	var allRepos []string
-	opts := &github.RepositoryListByOrgOptions{ListOptions: github.ListOptions{PerPage: 100}} // Fetch 100 repos per request
-
-	for {
-		repos, resp, err := ghClient.Repositories.ListByOrg(ctx, org, opts)
-		if err != nil {
-			return nil, fmt.Errorf("error fetching repositories from GitHub: %v", err)
-		}
-
-		// Append repo names
-		for _, repo := range repos {
-			allRepos = append(allRepos, repo.GetName())
-		}
-
-		// Break loop if there are no more pages
-		if resp.NextPage == 0 {
-			break
-		}
-
-		// Move to next page
-		opts.Page = resp.NextPage
-	}
-
-	return allRepos, nil
-}
-
 // Fetch latest commit test coverage for a repository
 func getRepoCoverage(org, repo, token string) (float64, bool) {
 	url := fmt.Sprintf("%s/%s/repos/%s/commits", codecovAPIBase, org, repo)
@@ -94,22 +47,30 @@ func getRepoCoverage(org, repo, token string) (float64, bool) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Printf("[DEBUG] ❌ Error calling Codecov API for %s: %v\n", repo, err)
 		return 0, false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		fmt.Printf("[DEBUG] ❌ Codecov API returned status %d for repo: %s\n", resp.StatusCode, repo)
 		return 0, false
 	}
 
 	var data struct {
-		Results []Commit `json:"results"`
+		Results []struct {
+			Totals struct {
+				Coverage float64 `json:"coverage"`
+			} `json:"totals"`
+		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		fmt.Printf("[DEBUG] ❌ Error decoding JSON for repo %s: %v\n", repo, err)
 		return 0, false
 	}
 
 	if len(data.Results) == 0 || data.Results[0].Totals.Coverage == 0 {
+		fmt.Printf("[DEBUG] ❌ No coverage data found for repo %s\n", repo)
 		return 0, false
 	}
 
@@ -119,6 +80,7 @@ func getRepoCoverage(org, repo, token string) (float64, bool) {
 // Fetch detailed code coverage report
 func getDetailedCoverageReport(org, repo, token string) (*CodecovReport, error) {
 	url := fmt.Sprintf("https://api.codecov.io/api/v2/gh/%s/repos/%s/report", org, repo)
+	fmt.Printf("[DEBUG] 📢 Fetching detailed coverage report: %s\n", url) // Print API URL
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -126,17 +88,28 @@ func getDetailedCoverageReport(org, repo, token string) (*CodecovReport, error) 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("error fetching detailed report: %v", err)
+		fmt.Printf("[DEBUG] ❌ Error fetching detailed report for %s: %v\n", repo, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	fmt.Printf("[DEBUG] 📢 Received HTTP status: %d for %s\n", resp.StatusCode, repo)
+
 	if resp.StatusCode != 200 {
+		fmt.Printf("[DEBUG] ❌ Codecov API returned non-200 status for detailed report of %s: %d\n", repo, resp.StatusCode)
 		return nil, fmt.Errorf("Codecov API returned non-200 status for detailed report: %d", resp.StatusCode)
 	}
 
 	var report CodecovReport
-	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
-		return nil, fmt.Errorf("error decoding detailed report JSON: %v", err)
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) == 0 {
+		fmt.Printf("[DEBUG] ❌ Empty response body for %s\n", repo)
+		return nil, fmt.Errorf("empty response body")
+	}
+
+	if err := json.Unmarshal(body, &report); err != nil {
+		fmt.Printf("[DEBUG] ❌ Error decoding JSON for detailed report of %s: %v\n", repo, err)
+		return nil, err
 	}
 
 	return &report, nil
@@ -164,10 +137,11 @@ func generateMarkdownReport(repo string, report *CodecovReport) error {
 	filename := fmt.Sprintf("detailed_%s_coverage_report.md", repo)
 	err := os.WriteFile(filename, []byte(output), 0644)
 	if err != nil {
-		return fmt.Errorf("error writing report: %v", err)
+		fmt.Printf("[DEBUG] ❌ Error writing report for %s: %v\n", repo, err)
+		return err
 	}
 
-	fmt.Printf("✅ Detailed coverage report generated: %s\n", filename)
+	fmt.Printf("[DEBUG] ✅ Detailed coverage report generated: %s\n", filename)
 	return nil
 }
 
@@ -179,56 +153,35 @@ func main() {
 	org := "openshift" // Organization name
 
 	// Get API tokens from environment variables
-	githubToken := os.Getenv("GITHUB_TOKEN")
-	if githubToken == "" {
-		log.Fatal("❌ Please set the GITHUB_TOKEN environment variable")
-	}
-
 	codecovToken := os.Getenv("CODECOV_TOKEN")
 	if codecovToken == "" {
 		log.Fatal("❌ Please set the CODECOV_TOKEN environment variable")
 	}
 
-	// Fetch repositories from GitHub
-	repos, err := getAllRepos(org, githubToken)
-	if err != nil {
-		log.Fatalf("❌ Error getting repos: %v", err)
-	}
-
-	// Store coverage details
-	var coveredRepos []RepoCoverage
-	var notConfiguredRepos []RepoCoverage
+	// List of example repositories to test
+	repos := []string{"backplane-cli", "example-repo", "another-repo"} // Replace with actual fetched repo list
 
 	// Fetch coverage for each repository
 	for _, repo := range repos {
+		fmt.Printf("\n🔹 Checking coverage for repo: %s\n", repo)
 		coverage, configured := getRepoCoverage(org, repo, codecovToken)
 		if configured {
-			coveredRepos = append(coveredRepos, RepoCoverage{Name: repo, Coverage: coverage, Configured: true})
+			fmt.Printf("%s: %.2f%%\n", repo, coverage)
 
 			// Generate detailed report if verbose mode is enabled
 			if *verbose {
 				report, err := getDetailedCoverageReport(org, repo, codecovToken)
 				if err == nil {
-					_ = generateMarkdownReport(repo, report)
+					err = generateMarkdownReport(repo, report)
+					if err != nil {
+						fmt.Printf("[DEBUG] ❌ Failed to generate markdown report for %s\n", repo)
+					}
+				} else {
+					fmt.Printf("[DEBUG] ❌ Failed to fetch detailed report for %s\n", repo)
 				}
 			}
 		} else {
-			notConfiguredRepos = append(notConfiguredRepos, RepoCoverage{Name: repo, Coverage: 0, Configured: false})
+			fmt.Printf("%s: Not Configured\n", repo)
 		}
-	}
-
-	// Sort repositories with coverage in descending order
-	sort.Slice(coveredRepos, func(i, j int) bool {
-		return coveredRepos[i].Coverage > coveredRepos[j].Coverage
-	})
-
-	// Print repositories with coverage first
-	for _, repo := range coveredRepos {
-		fmt.Printf("%s: %.2f%%\n", repo.Name, repo.Coverage)
-	}
-
-	// Print repositories without coverage
-	for _, repo := range notConfiguredRepos {
-		fmt.Printf("%s: Not Configured\n", repo.Name)
 	}
 }
