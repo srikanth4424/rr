@@ -37,6 +37,36 @@ type CodecovReport struct {
 	Files []FileCoverage `json:"files"`
 }
 
+// Fetch all repositories from GitHub
+func getAllRepos(org, githubToken string) ([]string, error) {
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: githubToken})
+	tc := oauth2.NewClient(ctx, ts)
+	ghClient := github.NewClient(tc)
+
+	var allRepos []string
+	opts := &github.RepositoryListByOrgOptions{ListOptions: github.ListOptions{PerPage: 100}}
+
+	for {
+		repos, resp, err := ghClient.Repositories.ListByOrg(ctx, org, opts)
+		if err != nil {
+			return nil, fmt.Errorf("error fetching repositories from GitHub: %v", err)
+		}
+
+		for _, repo := range repos {
+			allRepos = append(allRepos, repo.GetName())
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
+	}
+
+	return allRepos, nil
+}
+
 // Fetch latest commit test coverage for a repository
 func getRepoCoverage(org, repo, token string) (float64, bool) {
 	url := fmt.Sprintf("%s/%s/repos/%s/commits", codecovAPIBase, org, repo)
@@ -133,15 +163,23 @@ func main() {
 	org := "openshift" // Organization name
 
 	// Get API tokens from environment variables
+	githubToken := os.Getenv("GITHUB_TOKEN")
+	if githubToken == "" {
+		log.Fatal("❌ Please set the GITHUB_TOKEN environment variable")
+	}
+
 	codecovToken := os.Getenv("CODECOV_TOKEN")
 	if codecovToken == "" {
 		log.Fatal("❌ Please set the CODECOV_TOKEN environment variable")
 	}
 
-	// List of example repositories to test
-	repos := []string{"backplane-cli", "example-repo", "another-repo"} // Replace with actual fetched repo list
+	// Fetch all repositories
+	repos, err := getAllRepos(org, githubToken)
+	if err != nil {
+		log.Fatalf("❌ Error getting repositories: %v", err)
+	}
 
-	// Print header for CSV output
+	// Print CSV format header
 	fmt.Println("Repository, Coverage Percentage")
 
 	// Fetch coverage for each repository
@@ -150,7 +188,7 @@ func main() {
 		if configured {
 			fmt.Printf("%s, %.2f%%\n", repo, coverage)
 
-			// Generate detailed report if verbose mode is enabled
+			// Generate detailed CSV report if verbose mode is enabled
 			if *verbose {
 				report, err := getDetailedCoverageReport(org, repo, codecovToken)
 				if err == nil {
