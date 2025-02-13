@@ -188,6 +188,7 @@ var _ = ginkgo.Describe("cloud-ingress-operator", ginkgo.Ordered, func() {
 		if provider == "aws" {
 			awsAccessKey := os.Getenv("AWS_ACCESS_KEY_ID")
 			awsSecretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+			awsToken := os.Getenv("AWS_SESSION_TOKEN") // Added session token
 			Expect(awsAccessKey).NotTo(BeEmpty(), "awsAccessKey not found")
 			Expect(awsSecretKey).NotTo(BeEmpty(), "awsSecretKey not found")
 
@@ -197,7 +198,9 @@ var _ = ginkgo.Describe("cloud-ingress-operator", ginkgo.Ordered, func() {
 			log.Printf("Old load balancer name %s ", oldLBName)
 
 			// delete the load balancer in aws
-			awsSession, err := session.NewSession(aws.NewConfig().WithCredentials(credentials.NewStaticCredentials(awsAccessKey, awsSecretKey, "")).WithRegion(region))
+			awsSession, err := session.NewSession(aws.NewConfig().WithCredentials(
+				credentials.NewStaticCredentials(awsAccessKey, awsSecretKey, awsToken), // Include session token
+			).WithRegion(region))
 			Expect(err).NotTo(HaveOccurred(), "Could not set up aws session")
 
 			ginkgo.By("Initializing AWS ELB service")
