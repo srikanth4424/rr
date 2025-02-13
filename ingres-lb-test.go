@@ -198,11 +198,24 @@ var _ = ginkgo.Describe("cloud-ingress-operator", ginkgo.Ordered, func() {
 			log.Printf("Old load balancer name %s ", oldLBName)
 
 			// delete the load balancer in aws
-			awsSession, err := session.NewSession(aws.NewConfig().WithCredentials(
-				credentials.NewStaticCredentials(awsAccessKey, awsSecretKey, awsToken), // Include session token
-			).WithRegion(region))
-			Expect(err).NotTo(HaveOccurred(), "Could not set up aws session")
-
+			awsSession, err := session.NewSession(&aws.Config{
+				Region: aws.String(region),
+			})
+			Expect(err).NotTo(HaveOccurred(), "Failed to create AWS session")
+		
+			// Verify credentials exist
+			_, err = awsSession.Config.Credentials.Get()
+			Expect(err).NotTo(HaveOccurred(), "No valid AWS credentials found")
+		
+			// Add retry logic for token expiration
+			awsSession.Config.Retryer = func() aws.RequestRetryer {
+				return client.DefaultRetryer{
+					NumMaxRetries:    3,
+					MinRetryDelay:   1 * time.Second,
+					MaxRetryDelay:   10 * time.Second,
+				}
+			}
+		
 			ginkgo.By("Initializing AWS ELB service")
 			lb := elb.New(awsSession)
 			input := &elb.DeleteLoadBalancerInput{
