@@ -1,0 +1,126 @@
+### **1. Imports Section**
+**File**: Top of the file  
+**Current Line**: ~24 (Existing imports)  
+**Add**:  
+```go
+"github.com/aws/aws-sdk-go/service/elbv2"
+```
+
+---
+
+### **2. AWS Client Initialization**  
+**File**: Inside `ginkgo.It("manually deleted "+cioServiceName+" load balancer should be recreated", ...)`  
+**Current Line**: ~265 (After `awsSession` creation)  
+**Replace**:  
+```go
+// Existing line:
+lb := elb.New(awsSession)
+
+// Add these lines below:
+elbSvc := elb.New(awsSession)
+elbv2Svc := elbv2.New(awsSession)
+ec2Svc := ec2.New(awsSession)
+```
+
+---
+
+### **3. Listener Cleanup Function**  
+**File**: At the bottom of the file (after `deleteSecGroupReferencesToOrphans`)  
+**Current Line**: ~515 (After existing functions)  
+**Add**:  
+```go
+// Add this new function:
+func deleteListeners(svc *elbv2.ELBV2, lbName string) error {
+    // ... (full function body as provided earlier)
+}
+```
+
+---
+
+### **4. Enhanced Cleanup Sequence**  
+**File**: Inside the AWS test block (`if provider == "aws"`)  
+**Current Line**: ~290 (After deleting the LB)  
+**Replace**:  
+```go
+// Existing line:
+ec2Svc := ec2.New(awsSession)
+
+// Replace with:
+// 1. Delete listeners
+ginkgo.By("Deleting listeners")
+err = deleteListeners(elbv2Svc, oldLBName)
+Expect(err).NotTo(HaveOccurred(), "Failed to delete listeners")
+
+// 2. Delete target groups
+ginkgo.By("Cleaning up target groups")
+err = cleanupTargetGroups(elbv2Svc, oldLBName)
+Expect(err).NotTo(HaveOccurred(), "Failed to clean up target groups")
+
+// 3. Delete security groups
+ginkgo.By("Deleting security groups")
+for _, sgID := range orphanSecGroupIds {
+    _, err := ec2Svc.DeleteSecurityGroup(&ec2.DeleteSecurityGroupInput{
+        GroupId: sgID,
+    })
+    if err != nil {
+        log.Printf("Warning: Failed to delete SG %s: %v", *sgID, err)
+    }
+}
+
+// 4. Wait for LB state consistency
+ginkgo.By("Waiting for LB state consistency")
+err = elbSvc.WaitUntilLoadBalancerDeleted(&elb.DescribeLoadBalancersInput{
+    LoadBalancerNames: []*string{aws.String(oldLBName)},
+})
+if err != nil {
+    log.Printf("LB deletion wait failed: %v", err)
+}
+```
+
+---
+
+### **5. Eventual Consistency Handling**  
+**File**: In the LB recreation wait block  
+**Current Line**: ~300 (Inside `wait.PollUntilContextTimeout`)  
+**Update**:  
+```go
+// Replace the existing wait block with:
+err = wait.PollUntilContextTimeout(ctx, 30*time.Second, 15*time.Minute, false, func(ctx2 context.Context) (bool, error) {
+    newLBName, err := getLBForService(ctx2, k8s, rhApiSvcNamespace, cioServiceName, false)
+    if err != nil {
+        log.Printf("Error retrieving LB: %v", err)
+        return false, nil // Continue retrying
+    }
+    
+    // Add existence check for old LB
+    _, describeErr := elbSvc.DescribeLoadBalancers(&elb.DescribeLoadBalancersInput{
+        LoadBalancerNames: []*string{aws.String(oldLBName)},
+    })
+    if describeErr == nil {
+        log.Printf("Old LB still exists, waiting...")
+        return false, nil
+    }
+
+    return newLBName != "" && newLBName != oldLBName, nil
+})
+```
+
+---
+
+### **Summary of Critical Lines**
+| Change | Line Range | Purpose |
+|--------|------------|---------|
+| Imports | ~24 | Add ELBv2 support |
+| Client Init | ~265 | Proper AWS service initialization |
+| Listener Function | ~515 | Delete LB listeners |
+| Cleanup Order | ~290 | Fix resource deletion sequence |
+| Wait Logic | ~300 | Handle AWS eventual consistency |
+
+---
+
+### **Verification**
+1. Confirm all AWS clients (`elbSvc`, `elbv2Svc`, `ec2Svc`) are initialized **before use**.
+2. Ensure IAM policies include `elasticloadbalancing:DeleteListener`.
+3. Test with extended timeouts:
+```bash
+go test -v -tags=osde2e ./osde2e -ginkgo.timeout=30m
